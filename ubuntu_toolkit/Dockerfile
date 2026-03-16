@@ -1,8 +1,6 @@
-FROM ubuntu:24.04
+FROM redhat/ubi9:latest
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-      curl \
+RUN dnf install -y \
       unzip \
       less \
       groff \
@@ -10,7 +8,6 @@ RUN apt-get update && \
     && unzip awscliv2.zip \
     && ./aws/install \
     && rm -rf awscliv2.zip aws \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && dnf clean all
 
 ENTRYPOINT ["/bin/bash"]
