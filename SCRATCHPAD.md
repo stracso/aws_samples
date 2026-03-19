@@ -1,0 +1,2 @@
+# Basic scratchpad for snippets
+
