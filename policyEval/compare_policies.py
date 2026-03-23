@@ -52,14 +52,16 @@ def compare(file1, file2):
     only_in_2 = names2 - names1
     common = names1 & names2
 
+    sort_key = lambda x: str(x)
+
     print(f"=== Policies only in {file1} ===")
     for name in sorted(only_in_1):
-        for action, effect, resource in sorted(policies1[name]):
+        for action, effect, resource in sorted(policies1[name], key=sort_key):
             print(f"  [{name}] {action}  Effect={effect}  Resource={resource}")
 
     print(f"\n=== Policies only in {file2} ===")
     for name in sorted(only_in_2):
-        for action, effect, resource in sorted(policies2[name]):
+        for action, effect, resource in sorted(policies2[name], key=sort_key):
             print(f"  [{name}] {action}  Effect={effect}  Resource={resource}")
 
     print("\n=== Common policies with differences ===")
@@ -68,9 +70,9 @@ def compare(file1, file2):
         diff2 = policies2[name] - policies1[name]
         if diff1 or diff2:
             print(f"  Policy: {name}")
-            for action, effect, resource in sorted(diff1):
+            for action, effect, resource in sorted(diff1, key=sort_key):
                 print(f"    - (file1) {action}  Effect={effect}  Resource={resource}")
-            for action, effect, resource in sorted(diff2):
+            for action, effect, resource in sorted(diff2, key=sort_key):
                 print(f"    + (file2) {action}  Effect={effect}  Resource={resource}")
         else:
             print(f"  Policy: {name} — identical")
