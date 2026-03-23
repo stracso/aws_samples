@@ -11,16 +11,21 @@ import sys
 import re
 
 
+def _to_str(value):
+    """Convert any value to a stable string representation."""
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in sorted(value, key=str))
+    return str(value)
+
+
 def parse_policies(filepath):
-    """Parse a policy file into a dict of {policy_name: set_of_actions}."""
+    """Parse a policy file into a dict of {policy_name: set_of_action_strings}."""
     policies = {}
     with open(filepath, "r") as f:
         content = f.read()
 
-    # Split on lines starting with '# '
     blocks = re.split(r"^(# .+)$", content, flags=re.MULTILINE)
 
-    # blocks alternates: ['', '# Name1', '{json}', '# Name2', '{json}', ...]
     for i in range(1, len(blocks), 2):
         name = blocks[i].lstrip("# ").strip()
         body = blocks[i + 1].strip()
@@ -32,11 +37,10 @@ def parse_policies(filepath):
             stmt_actions = stmt.get("Action", [])
             if isinstance(stmt_actions, str):
                 stmt_actions = [stmt_actions]
-            resource = stmt.get("Resource", "")
-            if isinstance(resource, list):
-                resource = ", ".join(sorted(resource))
+            effect = stmt.get("Effect", "")
+            resource = _to_str(stmt.get("Resource", ""))
             for a in stmt_actions:
-                actions.add((a, stmt.get("Effect", ""), resource))
+                actions.add(f"{a} | Effect={effect} | Resource={resource}")
         policies[name] = actions
     return policies
 
@@ -52,17 +56,15 @@ def compare(file1, file2):
     only_in_2 = names2 - names1
     common = names1 & names2
 
-    sort_key = lambda x: str(x)
-
     print(f"=== Policies only in {file1} ===")
     for name in sorted(only_in_1):
-        for action, effect, resource in sorted(policies1[name], key=sort_key):
-            print(f"  [{name}] {action}  Effect={effect}  Resource={resource}")
+        for entry in sorted(policies1[name]):
+            print(f"  [{name}] {entry}")
 
     print(f"\n=== Policies only in {file2} ===")
     for name in sorted(only_in_2):
-        for action, effect, resource in sorted(policies2[name], key=sort_key):
-            print(f"  [{name}] {action}  Effect={effect}  Resource={resource}")
+        for entry in sorted(policies2[name]):
+            print(f"  [{name}] {entry}")
 
     print("\n=== Common policies with differences ===")
     for name in sorted(common):
@@ -70,10 +72,10 @@ def compare(file1, file2):
         diff2 = policies2[name] - policies1[name]
         if diff1 or diff2:
             print(f"  Policy: {name}")
-            for action, effect, resource in sorted(diff1, key=sort_key):
-                print(f"    - (file1) {action}  Effect={effect}  Resource={resource}")
-            for action, effect, resource in sorted(diff2, key=sort_key):
-                print(f"    + (file2) {action}  Effect={effect}  Resource={resource}")
+            for entry in sorted(diff1):
+                print(f"    - (file1) {entry}")
+            for entry in sorted(diff2):
+                print(f"    + (file2) {entry}")
         else:
             print(f"  Policy: {name} — identical")
 
