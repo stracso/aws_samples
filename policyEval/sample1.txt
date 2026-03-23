@@ -1,0 +1,25 @@
+# CreateGrantKms
+{
+    "Statement": [
+        {
+            "Action": [
+                "kms:CreateGrant"
+            ],
+            "Resource": "arn:aws:kms:us-east-2:xxfwewefwer",
+            "Effect": "Allow"
+        }
+    ]
+}
+
+# CreateGrantKmsv3
+{
+    "Statement": [
+        {
+            "Action": [
+                "kms:CreateGrant"
+            ],
+            "Resource": "arn:aws:kms:us-east-2:fgdfgrtger",
+            "Effect": "Allow"
+        }
+    ]
+}

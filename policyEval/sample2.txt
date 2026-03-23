@@ -1,0 +1,12 @@
+# CreateGrantKmsv2
+{
+    "Statement": [
+        {
+            "Action": [
+                "kms:CreateGrant"
+            ],
+            "Resource": "arn:aws:kms:us-east-2:xxfwewefwer",
+            "Effect": "Deny"
+        }
+    ]
+}
