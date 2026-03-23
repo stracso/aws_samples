@@ -34,7 +34,7 @@ def parse_policies(filepath):
                 stmt_actions = [stmt_actions]
             resource = stmt.get("Resource", "")
             if isinstance(resource, list):
-                resource = tuple(sorted(resource))
+                resource = ", ".join(sorted(resource))
             for a in stmt_actions:
                 actions.add((a, stmt.get("Effect", ""), resource))
         policies[name] = actions
