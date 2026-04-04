@@ -1,9 +1,10 @@
 """
-Iceberg Synthetic Data Generator - AWS Glue PySpark Script
+Synthetic Data Generator - AWS Glue PySpark Script
 
 Reads the schema of an existing Iceberg source table, creates a new Iceberg
 target table with the same schema but a different partition strategy, samples
-rows from the source, and generates synthetic data to fill the target table.
+rows from the source, and generates synthetic data persisted as a staging
+Parquet dataset.
 
 Usage:
   Run as an AWS Glue job with the following job parameters:
@@ -13,15 +14,12 @@ Usage:
     --TARGET_PARTITION    : Partition spec for the target table, e.g.
                             "month(event_ts), bucket(8, user_id)" (required)
     --TARGET_ROWS         : Number of synthetic rows to generate (required)
+    --STAGING_PATH        : S3 path for staging Parquet data (required)
 """
 
+import re
 import sys
 import time
-import hashlib
-import random
-import string
-from datetime import datetime, timedelta
-from decimal import Decimal
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -31,15 +29,14 @@ from pyspark.sql.types import (
     TimestampType, DateType, BinaryType, ArrayType, MapType, StructType as ST,
 )
 from awsglue.utils import getResolvedOptions
-from awsglue.context import GlueContext
+
+# Maximum number of distinct values to generate for partition columns.
+NUM_PARTITIONS = 100
 
 
 # ---------------------------------------------------------------------------
 # Configuration & Parameters
 # ---------------------------------------------------------------------------
-
-BATCH_SIZE = 500_000  # rows per write batch to avoid memory pressure
-
 
 def get_params():
     """Parse Glue job parameters."""
@@ -50,6 +47,7 @@ def get_params():
         "TARGET_TABLE",
         "TARGET_PARTITION",
         "TARGET_ROWS",
+        "STAGING_PATH",
     ])
     return {
         "job_name":         args["JOB_NAME"],
@@ -58,10 +56,11 @@ def get_params():
         "target_table":     args["TARGET_TABLE"],
         "target_partition": args["TARGET_PARTITION"],
         "target_rows":      int(args["TARGET_ROWS"]),
+        "staging_path":     args["STAGING_PATH"],
     }
 
 
-def init_spark(params):
+def init_spark():
     """Initialise Spark session with Iceberg + Glue catalog."""
     spark = (
         SparkSession.builder
@@ -112,7 +111,6 @@ def build_synthetic_column(col_name, data_type, sample_df, num_rows):
     Build a synthetic column expression based on the data type and sample
     statistics. Returns a Spark Column expression.
     """
-    # For numeric types, use the sample min/max range with rand()
     if isinstance(data_type, (LongType, IntegerType, ShortType, ByteType)):
         stats = sample_df.agg(
             F.min(col_name).alias("min_val"),
@@ -160,7 +158,6 @@ def build_synthetic_column(col_name, data_type, sample_df, num_rows):
                 F.lit(min_ts.strftime("%Y-%m-%d %H:%M:%S")).cast("timestamp")
                 + F.expr(f"make_interval(0,0,0,0,0, cast(rand() * {range_secs} as int))")
             )
-        # Fallback: random timestamps over the last 2 years
         return (
             F.lit("2024-01-01 00:00:00").cast("timestamp")
             + F.expr(f"make_interval(0,0,0,0,0, cast(rand() * {730 * 86400} as int))")
@@ -179,7 +176,6 @@ def build_synthetic_column(col_name, data_type, sample_df, num_rows):
         return F.date_add(F.lit("2024-01-01"), (F.rand() * 730).cast("int"))
 
     if isinstance(data_type, StringType):
-        # Collect distinct values from sample; if cardinality is low, reuse them
         distinct_vals = (
             sample_df.select(col_name)
             .filter(F.col(col_name).isNotNull())
@@ -189,12 +185,10 @@ def build_synthetic_column(col_name, data_type, sample_df, num_rows):
             .collect()
         )
         if 1 < len(distinct_vals) <= 100:
-            # Low cardinality — pick randomly from observed values
             return F.element_at(
                 F.array([F.lit(v) for v in distinct_vals]),
                 (F.rand() * len(distinct_vals)).cast("int") + 1,
             )
-        # High cardinality — generate synthetic strings
         return F.concat(F.lit(f"{col_name}_"), F.monotonically_increasing_id().cast("string"))
 
     if isinstance(data_type, ArrayType):
@@ -204,7 +198,6 @@ def build_synthetic_column(col_name, data_type, sample_df, num_rows):
                 F.concat(F.lit("val_"), (F.rand() * 100).cast("int").cast("string")),
                 F.concat(F.lit("val_"), (F.rand() * 100).cast("int").cast("string")),
             )
-        # Numeric array fallback
         return F.array(F.lit(None).cast(elem_type))
 
     if isinstance(data_type, MapType):
@@ -222,27 +215,158 @@ def build_synthetic_column(col_name, data_type, sample_df, num_rows):
     return F.lit(None).cast(data_type)
 
 
-def generate_synthetic_df(spark, schema, sample_df, num_rows, num_partitions=200):
+def parse_partition_columns(partition_spec):
+    """
+    Extract column names referenced in an Iceberg partition spec string.
+
+    Handles bare column names and transform expressions such as:
+        "month(event_ts), bucket(8, user_id)"  ->  ["event_ts", "user_id"]
+        "region"                                ->  ["region"]
+        "year(ts), category"                    ->  ["ts", "category"]
+    """
+    columns = []
+    for token in partition_spec.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        # Match transform expressions like month(col) or bucket(N, col)
+        match = re.match(r'\w+\s*\((.+)\)', token)
+        if match:
+            inner = match.group(1)
+            # The column name is the last argument (first may be a numeric param)
+            parts = [p.strip() for p in inner.split(",")]
+            columns.append(parts[-1])
+        else:
+            # Bare column name
+            columns.append(token)
+    return columns
+
+
+def generate_synthetic_df(spark, schema, sample_df, num_rows, partition_spec="", num_spark_partitions=200):
     """
     Generate a DataFrame of synthetic data matching the given schema,
     using sample statistics to produce realistic value distributions.
+
+    Partition columns (derived from *partition_spec*) are constrained to
+    at most NUM_PARTITIONS distinct values so the resulting Iceberg table
+    has a controlled number of partitions.
     """
-    base_df = spark.range(0, num_rows, numPartitions=num_partitions)
+    partition_cols = set(parse_partition_columns(partition_spec))
+
+    base_df = spark.range(0, num_rows, numPartitions=num_spark_partitions)
 
     for field in schema.fields:
         col_expr = build_synthetic_column(field.name, field.dataType, sample_df, num_rows)
-        # If the column name collides with the base 'id' column from spark.range,
-        # we overwrite it; otherwise we add it.
+        if field.name in partition_cols:
+            # Constrain partition column to NUM_PARTITIONS distinct values
+            # by assigning each row to a bucket and mapping it back to a
+            # value within the column's range.
+            col_expr = build_synthetic_column(field.name, field.dataType, sample_df, NUM_PARTITIONS)
+            bucket_id = (F.monotonically_increasing_id() % NUM_PARTITIONS).cast("long")
+            col_expr = _limit_partition_values(field.name, field.dataType, sample_df, bucket_id)
         base_df = base_df.withColumn(field.name, col_expr)
 
-    # Drop the spark.range 'id' column if it's not part of the target schema
     schema_col_names = [f.name for f in schema.fields]
     if "id" not in schema_col_names and "id" in base_df.columns:
         base_df = base_df.drop("id")
 
-    # Select only the schema columns in the correct order
     base_df = base_df.select(*schema_col_names)
     return base_df
+
+
+def _limit_partition_values(col_name, data_type, sample_df, bucket_id):
+    """
+    Return a column expression that maps *bucket_id* (0 .. NUM_PARTITIONS-1)
+    to a deterministic value appropriate for *data_type*, ensuring at most
+    NUM_PARTITIONS distinct values are produced.
+    """
+    n = NUM_PARTITIONS
+
+    if isinstance(data_type, (LongType, IntegerType, ShortType, ByteType)):
+        stats = sample_df.agg(
+            F.min(col_name).alias("min_val"),
+            F.max(col_name).alias("max_val"),
+        ).collect()[0]
+        min_val = stats["min_val"] if stats["min_val"] is not None else 0
+        max_val = stats["max_val"] if stats["max_val"] is not None else 1000000
+        step = max((max_val - min_val) // n, 1)
+        return (F.lit(min_val) + bucket_id * F.lit(step)).cast(data_type)
+
+    if isinstance(data_type, (FloatType, DoubleType)):
+        stats = sample_df.agg(
+            F.min(col_name).alias("min_val"),
+            F.max(col_name).alias("max_val"),
+        ).collect()[0]
+        min_val = float(stats["min_val"]) if stats["min_val"] is not None else 0.0
+        max_val = float(stats["max_val"]) if stats["max_val"] is not None else 1000.0
+        step = (max_val - min_val) / n
+        return (F.lit(min_val) + bucket_id.cast("double") * F.lit(step)).cast(data_type)
+
+    if isinstance(data_type, DecimalType):
+        stats = sample_df.agg(
+            F.min(col_name).alias("min_val"),
+            F.max(col_name).alias("max_val"),
+        ).collect()[0]
+        min_val = float(stats["min_val"]) if stats["min_val"] is not None else 0.0
+        max_val = float(stats["max_val"]) if stats["max_val"] is not None else 10000.0
+        step = (max_val - min_val) / n
+        return F.round(F.lit(min_val) + bucket_id.cast("double") * F.lit(step), data_type.scale).cast(data_type)
+
+    if isinstance(data_type, TimestampType):
+        stats = sample_df.agg(
+            F.min(col_name).alias("min_val"),
+            F.max(col_name).alias("max_val"),
+        ).collect()[0]
+        if stats["min_val"] is not None and stats["max_val"] is not None:
+            min_ts = stats["min_val"]
+            max_ts = stats["max_val"]
+            range_secs = max(int((max_ts - min_ts).total_seconds()), 1)
+        else:
+            min_ts_str = "2024-01-01 00:00:00"
+            range_secs = 730 * 86400
+            return (
+                F.lit(min_ts_str).cast("timestamp")
+                + F.expr(f"make_interval(0,0,0,0,0, cast(({bucket_id}) * {range_secs // n} as int))")
+            )
+        step_secs = range_secs // n
+        return (
+            F.lit(min_ts.strftime("%Y-%m-%d %H:%M:%S")).cast("timestamp")
+            + F.expr(f"make_interval(0,0,0,0,0, cast(({bucket_id}) * {step_secs} as int))")
+        )
+
+    if isinstance(data_type, DateType):
+        stats = sample_df.agg(
+            F.min(col_name).alias("min_val"),
+            F.max(col_name).alias("max_val"),
+        ).collect()[0]
+        if stats["min_val"] is not None and stats["max_val"] is not None:
+            min_d = stats["min_val"]
+            range_days = max((stats["max_val"] - min_d).days, 1)
+        else:
+            min_d = "2024-01-01"
+            range_days = 730
+        step_days = max(range_days // n, 1)
+        return F.date_add(F.lit(min_d), (bucket_id * F.lit(step_days)).cast("int"))
+
+    if isinstance(data_type, StringType):
+        distinct_vals = (
+            sample_df.select(col_name)
+            .filter(F.col(col_name).isNotNull())
+            .distinct()
+            .limit(n)
+            .rdd.flatMap(lambda x: x)
+            .collect()
+        )
+        if len(distinct_vals) > 0:
+            vals = distinct_vals[:n]
+            return F.element_at(
+                F.array([F.lit(v) for v in vals]),
+                (bucket_id % len(vals)).cast("int") + 1,
+            )
+        return F.concat(F.lit(f"{col_name}_"), (bucket_id % n).cast("string"))
+
+    # Fallback: use the normal random generator (no cardinality limit)
+    return build_synthetic_column(col_name, data_type, sample_df, n)
 
 
 # ---------------------------------------------------------------------------
@@ -265,10 +389,9 @@ def build_create_table_ddl(target_fqn, schema, target_partition):
         )
         USING iceberg
         {partition_clause}
-        TBLPROPERTIES (
-            'format-version' = '2',
-            'write.parquet.row-group-size-bytes' = '134217728'
-        )
+        OPTIONS (
+            'format-version'='2'
+        );
     """
     return ddl
 
@@ -282,43 +405,15 @@ def create_target_table(spark, target_fqn, schema, target_partition):
 
 
 # ---------------------------------------------------------------------------
-# Data Insertion
+# Parquet Staging
 # ---------------------------------------------------------------------------
 
-def insert_data(spark, target_fqn, synthetic_df, target_rows):
-    """Insert synthetic data into the target table in batches."""
-    total_written = 0
-    batch_num = 0
-
-    if target_rows <= BATCH_SIZE:
-        # Single write
-        print(f"Writing {target_rows:,} rows in a single batch...")
-        start = time.time()
-        synthetic_df.writeTo(target_fqn).append()
-        total_written = target_rows
-        print(f"  Batch completed in {elapsed(start)}s — {total_written:,} rows written.")
-    else:
-        # Multiple batches
-        num_batches = (target_rows + BATCH_SIZE - 1) // BATCH_SIZE
-        fraction_per_batch = BATCH_SIZE / target_rows
-
-        for i in range(num_batches):
-            batch_num += 1
-            rows_this_batch = min(BATCH_SIZE, target_rows - total_written)
-            # Use fraction sampling to approximate batch size
-            batch_df = synthetic_df.sample(
-                withReplacement=False,
-                fraction=fraction_per_batch,
-            ).limit(rows_this_batch)
-
-            print(f"  Writing batch {batch_num}/{num_batches} ({rows_this_batch:,} rows)...")
-            start = time.time()
-            batch_df.writeTo(target_fqn).append()
-            total_written += rows_this_batch
-            print(f"  Batch {batch_num} completed in {elapsed(start)}s — "
-                  f"total written: {total_written:,}/{target_rows:,}")
-
-    return total_written
+def write_parquet_staging(synthetic_df, staging_path, target_rows):
+    """Write synthetic data to a Parquet dataset on S3."""
+    print(f"  Staging path: {staging_path}")
+    start = time.time()
+    synthetic_df.write.mode("overwrite").parquet(staging_path)
+    print(f"  Parquet staging write completed in {elapsed(start)}s — {target_rows:,} rows")
 
 
 # ---------------------------------------------------------------------------
@@ -327,20 +422,22 @@ def insert_data(spark, target_fqn, synthetic_df, target_rows):
 
 def main():
     params = get_params()
-    spark = init_spark(params)
+    spark = init_spark()
 
     source_fqn = table_fqn(params["database"], params["source_table"])
     target_fqn = table_fqn(params["database"], params["target_table"])
     target_partition = params["target_partition"]
     target_rows = params["target_rows"]
+    staging_path = f"{params['staging_path']}/{params['target_table']}_parquet_staging"
 
     print("=" * 60)
-    print("Iceberg Synthetic Data Generator")
+    print("Synthetic Data Generator")
     print("=" * 60)
     print(f"  Source table     : {source_fqn}")
     print(f"  Target table     : {target_fqn}")
     print(f"  Target partition : {target_partition}")
     print(f"  Target rows      : {target_rows:,}")
+    print(f"  Staging path     : {staging_path}")
     print()
 
     # Step 1: Read source schema
@@ -357,39 +454,28 @@ def main():
     sample_count = sample_df.count()
     print(f"  Sampled {sample_count} rows in {elapsed(start)}s")
 
-    # Step 3: Create target table
-    print("\nStep 3: Creating target table...")
+    # Step 3: Create target Iceberg table
+    print("\nStep 3: Creating target Iceberg table...")
     create_target_table(spark, target_fqn, schema, target_partition)
     print(f"  Target table created: {target_fqn}")
 
     # Step 4: Generate synthetic data
     print(f"\nStep 4: Generating {target_rows:,} synthetic rows...")
     start = time.time()
-    synthetic_df = generate_synthetic_df(spark, schema, sample_df, target_rows)
+    synthetic_df = generate_synthetic_df(spark, schema, sample_df, target_rows, partition_spec=target_partition)
     print(f"  DataFrame built in {elapsed(start)}s (lazy — not materialised yet)")
 
-    # Step 5: Insert into target table
-    print(f"\nStep 5: Inserting data into {target_fqn}...")
+    # Step 5: Write to staging Parquet
+    print(f"\nStep 5: Writing synthetic data to staging Parquet...")
     start = time.time()
-    rows_written = insert_data(spark, target_fqn, synthetic_df, target_rows)
-    total_time = elapsed(start)
-    print(f"\n  Total insert time: {total_time}s")
-    print(f"  Rows written: {rows_written:,}")
-    print(f"  Throughput: {round(rows_written / max(total_time, 0.001)):,} rows/sec")
-
-    # Step 6: Verify
-    print("\nStep 6: Verifying target table...")
-    actual_count = spark.sql(f"SELECT count(*) FROM {target_fqn}").collect()[0][0]
-    print(f"  Target row count: {actual_count:,}")
-    print(f"  Expected:         {target_rows:,}")
-
-    # Show a few sample rows
-    print("\n  Sample rows from target:")
-    spark.sql(f"SELECT * FROM {target_fqn} LIMIT 5").show(truncate=False)
+    write_parquet_staging(synthetic_df, staging_path, target_rows)
+    parquet_time = elapsed(start)
+    print(f"  Parquet staging completed in {parquet_time}s")
 
     # Cleanup
     sample_df.unpersist()
     print("\nSynthetic data generation complete.")
+    print(f"Staging Parquet ready at: {staging_path}")
 
 
 if __name__ == "__main__":
