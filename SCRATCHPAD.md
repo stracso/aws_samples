@@ -7,12 +7,10 @@
 setlocal enabledelayedexpansion
 
 REM ============================================================
-REM List inline policies attached to an IAM role and extract
-REM the full policy document (JSON) for each one.
+REM List inline and customer-managed policies for an IAM role,
+REM and extract the full policy document JSON for each.
 REM
-REM Usage:  list_role_policies.bat <role-name> [profile]
-REM Example: list_role_policies.bat MyAppRole
-REM          list_role_policies.bat MyAppRole my-aws-profile
+REM Usage:  list_role_policies.bat <role-name> [aws-profile]
 REM ============================================================
 
 if "%~1"=="" (
@@ -29,70 +27,67 @@ echo ============================================================
 echo  Role: %ROLE_NAME%
 echo ============================================================
 
-REM --- Inline (embedded) policies ---
+REM ===========================================
+REM  INLINE POLICIES
+REM ===========================================
 echo.
 echo --- Inline Policies ---
 echo.
 
-REM Write policy names to a temp file, one per line
-aws iam list-role-policies --role-name %ROLE_NAME% %PROFILE_ARG% --query "PolicyNames[]" --output json > "%TEMP%\inline_policies.json"
+REM Get the count of inline policies
+for /f %%C in ('aws iam list-role-policies --role-name %ROLE_NAME% %PROFILE_ARG% --query "length(PolicyNames)" --output text') do set "INLINE_COUNT=%%C"
 
-REM Parse each policy name from the JSON array
-for /f "usebackq tokens=* delims=" %%P in (`type "%TEMP%\inline_policies.json" ^| findstr /v /r "^\[" ^| findstr /v /r "^\]"`) do (
-    REM Strip quotes, commas, and leading spaces
-    set "RAW=%%P"
-    set "RAW=!RAW:"=!"
-    set "RAW=!RAW:,=!"
-    for /f "tokens=* delims= " %%T in ("!RAW!") do set "POLICY_NAME=%%T"
-
-    if not "!POLICY_NAME!"=="" (
-        echo [Inline Policy] !POLICY_NAME!
-        echo --------------------------------------------------------
-        aws iam get-role-policy --role-name %ROLE_NAME% --policy-name "!POLICY_NAME!" %PROFILE_ARG% --output json
-        echo.
+if "!INLINE_COUNT!"=="0" (
+    echo   No inline policies found.
+) else (
+    set /a "LAST_IDX=!INLINE_COUNT!-1"
+    for /l %%I in (0,1,!LAST_IDX!) do (
+        for /f "usebackq delims=" %%N in (`aws iam list-role-policies --role-name %ROLE_NAME% %PROFILE_ARG% --query "PolicyNames[%%I]" --output text`) do (
+            echo [Inline Policy %%I] %%N
+            echo --------------------------------------------------------
+            aws iam get-role-policy --role-name %ROLE_NAME% --policy-name "%%N" %PROFILE_ARG% --output json
+            echo.
+        )
     )
 )
 
-REM --- Customer-managed attached policies (skip AWS-managed) ---
+REM ===========================================
+REM  ATTACHED CUSTOMER-MANAGED POLICIES
+REM ===========================================
 echo.
 echo --- Attached Customer-Managed Policies ---
 echo.
 
-REM Write attached policy ARNs to a temp file, one per line
-aws iam list-attached-role-policies --role-name %ROLE_NAME% %PROFILE_ARG% --query "AttachedPolicies[].PolicyArn" --output json > "%TEMP%\attached_policies.json"
+REM Get total count of attached policies
+for /f %%C in ('aws iam list-attached-role-policies --role-name %ROLE_NAME% %PROFILE_ARG% --query "length(AttachedPolicies)" --output text') do set "ATTACHED_COUNT=%%C"
 
-for /f "usebackq tokens=* delims=" %%A in (`type "%TEMP%\attached_policies.json" ^| findstr /v /r "^\[" ^| findstr /v /r "^\]"`) do (
-    set "RAW=%%A"
-    set "RAW=!RAW:"=!"
-    set "RAW=!RAW:,=!"
-    for /f "tokens=* delims= " %%T in ("!RAW!") do set "POLICY_ARN=%%T"
+if "!ATTACHED_COUNT!"=="0" (
+    echo   No attached policies found.
+) else (
+    set /a "LAST_IDX=!ATTACHED_COUNT!-1"
+    for /l %%I in (0,1,!LAST_IDX!) do (
+        for /f "usebackq delims=" %%A in (`aws iam list-attached-role-policies --role-name %ROLE_NAME% %PROFILE_ARG% --query "AttachedPolicies[%%I].PolicyArn" --output text`) do (
+            REM Skip AWS-managed policies
+            echo %%A | findstr /C:"arn:aws:iam::aws:policy" >nul 2>&1
+            if errorlevel 1 (
+                echo [Customer Policy %%I] %%A
 
-    if not "!POLICY_ARN!"=="" (
-        REM Skip AWS-managed policies
-        echo !POLICY_ARN! | findstr /C:":aws:policy" >nul 2>&1
-        if errorlevel 1 (
-            echo [Customer Policy] !POLICY_ARN!
-
-            REM Get the default version id
-            for /f "usebackq delims=" %%V in (`aws iam get-policy --policy-arn "!POLICY_ARN!" %PROFILE_ARG% --query "Policy.DefaultVersionId" --output text`) do (
-                echo   Version: %%V
-                echo --------------------------------------------------------
-                aws iam get-policy-version --policy-arn "!POLICY_ARN!" --version-id "%%V" %PROFILE_ARG% --output json
-                echo.
+                for /f "usebackq delims=" %%V in (`aws iam get-policy --policy-arn "%%A" %PROFILE_ARG% --query "Policy.DefaultVersionId" --output text`) do (
+                    echo   Version: %%V
+                    echo --------------------------------------------------------
+                    aws iam get-policy-version --policy-arn "%%A" --version-id "%%V" %PROFILE_ARG% --output json
+                    echo.
+                )
             )
         )
     )
 )
 
-REM Cleanup temp files
-del "%TEMP%\inline_policies.json" 2>nul
-del "%TEMP%\attached_policies.json" 2>nul
-
 echo ============================================================
 echo  Done.
 echo ============================================================
-
 endlocal
+
 
 
 ```
