@@ -3,90 +3,135 @@
 ---
 ```
 
-@echo off
-setlocal enabledelayedexpansion
+SCRATCHPAD-2025-APR-15
 
-REM ============================================================
-REM List inline and customer-managed policies for an IAM role,
-REM and extract the full policy document JSON for each.
-REM
-REM Usage:  list_role_policies.bat <role-name> [aws-profile]
-REM ============================================================
 
-if "%~1"=="" (
-    echo Usage: %~nx0 ^<role-name^> [aws-profile]
-    exit /b 1
-)
+## DEPLOY
 
-set "ROLE_NAME=%~1"
-set "PROFILE_ARG="
-if not "%~2"=="" set "PROFILE_ARG=--profile %~2"
+S3_BUCKET="BUCKET"
+SCRIPT_BUCKET="BUCKET"
+ROLE_ARN="ROLEARN"
 
-echo.
-echo ============================================================
-echo  Role: %ROLE_NAME%
-echo ============================================================
+aws s3 cp iceberg_partition_perf_test_v2.py \
+  s3://${SCRIPT_BUCKET}/tmp_glue_scripts/iceberg_partition_perf_test_v2.py
 
-REM ===========================================
-REM  INLINE POLICIES
-REM ===========================================
-echo.
-echo --- Inline Policies ---
-echo.
 
-REM Get the count of inline policies
-for /f %%C in ('aws iam list-role-policies --role-name %ROLE_NAME% %PROFILE_ARG% --query "length(PolicyNames)" --output text') do set "INLINE_COUNT=%%C"
 
-if "!INLINE_COUNT!"=="0" (
-    echo   No inline policies found.
-) else (
-    set /a "LAST_IDX=!INLINE_COUNT!-1"
-    for /l %%I in (0,1,!LAST_IDX!) do (
-        for /f "usebackq delims=" %%N in (`aws iam list-role-policies --role-name %ROLE_NAME% %PROFILE_ARG% --query "PolicyNames[%%I]" --output text`) do (
-            echo [Inline Policy %%I] %%N
-            echo --------------------------------------------------------
-            aws iam get-role-policy --role-name %ROLE_NAME% --policy-name "%%N" %PROFILE_ARG% --output json
-            echo.
-        )
-    )
-)
+### DATA GEN - INPUT
+STAGING_PATH="s3://BUCKET/temporary/staging"
 
-REM ===========================================
-REM  ATTACHED CUSTOMER-MANAGED POLICIES
-REM ===========================================
-echo.
-echo --- Attached Customer-Managed Policies ---
-echo.
+aws glue start-job-run \
+  --job-name ot-synthetic-data-generator \
+  --arguments '{
+    "--DATABASE_NAME": "market_data",
+    "--SOURCE_TABLE": "ot_test_simm_sensitivty_stg_100k",
+    "--TARGET_TABLE": "ot_pftst_sensi_input_data",
+    "--TARGET_PARTITION": " ",
+    "--TARGET_ROWS": "100000",
+    "--STAGING_PATH": "'"${STAGING_PATH}"'"
+  }'
 
-REM Get total count of attached policies
-for /f %%C in ('aws iam list-attached-role-policies --role-name %ROLE_NAME% %PROFILE_ARG% --query "length(AttachedPolicies)" --output text') do set "ATTACHED_COUNT=%%C"
+#### copy data
 
-if "!ATTACHED_COUNT!"=="0" (
-    echo   No attached policies found.
-) else (
-    set /a "LAST_IDX=!ATTACHED_COUNT!-1"
-    for /l %%I in (0,1,!LAST_IDX!) do (
-        for /f "usebackq delims=" %%A in (`aws iam list-attached-role-policies --role-name %ROLE_NAME% %PROFILE_ARG% --query "AttachedPolicies[%%I].PolicyArn" --output text`) do (
-            REM Skip AWS-managed policies
-            echo %%A | findstr /C:"arn:aws:iam::aws:policy" >nul 2>&1
-            if errorlevel 1 (
-                echo [Customer Policy %%I] %%A
+aws glue start-job-run \
+  --job-name ot-iceberg-persist-synthetic-data \
+  --arguments '{
+    "--DATABASE_NAME": "market_data",
+    "--TARGET_TABLE": "ot_pftst_sensi_input_data",
+    "--TARGET_ROWS": "100000",
+    "--STAGING_PATH": "'"${STAGING_PATH}"'"
+  }'
 
-                for /f "usebackq delims=" %%V in (`aws iam get-policy --policy-arn "%%A" %PROFILE_ARG% --query "Policy.DefaultVersionId" --output text`) do (
-                    echo   Version: %%V
-                    echo --------------------------------------------------------
-                    aws iam get-policy-version --policy-arn "%%A" --version-id "%%V" %PROFILE_ARG% --output json
-                    echo.
-                )
-            )
-        )
-    )
-)
 
-echo ============================================================
-echo  Done.
-echo ============================================================
-endlocal
+## target table - Unpartitioned
+
+aws glue start-job-run \
+  --job-name synthetic-data-generator \
+  --arguments '{
+    "--DATABASE_NAME": "market_data",
+    "--SOURCE_TABLE": "ot_test_simm_sensitivty_stg_100k",
+    "--TARGET_TABLE": "ot_pftst_sensi_unpartitioned",
+    "--TARGET_PARTITION": " ",
+    "--TARGET_ROWS": "1000",
+    "--STAGING_PATH": "'"${STAGING_PATH}"'"
+  }'
+
+
+## target table - Date partition
+
+aws glue start-job-run \
+  --job-name synthetic-data-generator \
+  --arguments '{
+    "--DATABASE_NAME": "market_data",
+    "--SOURCE_TABLE": "ot_test_simm_sensitivty_stg_100k",
+    "--TARGET_TABLE": "ot_pftst_sensi_datepart",
+    "--TARGET_PARTITION": "cob_date",
+    "--TARGET_ROWS": "1000",
+    "--STAGING_PATH": "'"${STAGING_PATH}"'"
+  }'
+
+## target table - bucket partition
+
+aws glue start-job-run \
+  --job-name synthetic-data-generator \
+  --arguments '{
+    "--DATABASE_NAME": "market_data",
+    "--SOURCE_TABLE": "ot_test_simm_sensitivty_stg_100k",
+    "--TARGET_TABLE": "ot_pftst_sensi_bucket",
+    "--TARGET_PARTITION": "bucket(16, primary_key)",
+    "--TARGET_ROWS": "1000",
+    "--STAGING_PATH": "'"${STAGING_PATH}"'"
+  }'
+
+## target table - truncate partition
+
+aws glue start-job-run \
+  --job-name synthetic-data-generator \
+  --arguments '{
+    "--DATABASE_NAME": "market_data",
+    "--SOURCE_TABLE": "ot_test_simm_sensitivty_stg_100k",
+    "--TARGET_TABLE": "ot_pftst_sensi_truncate",
+    "--TARGET_PARTITION": "truncate(10, primary_key)",
+    "--TARGET_ROWS": "1000",
+    "--STAGING_PATH": "'"${STAGING_PATH}"'"
+  }'
+
+## target table - composite partition
+
+aws glue start-job-run \
+  --job-name synthetic-data-generator \
+  --arguments '{
+    "--DATABASE_NAME": "market_data",
+    "--SOURCE_TABLE": "ot_test_simm_sensitivty_stg_100k",
+    "--TARGET_TABLE": "ot_pftst_sensi_truncate",
+    "--TARGET_PARTITION": "cob_date,bucket(16, primary_key)",
+    "--TARGET_ROWS": "1000",
+    "--STAGING_PATH": "'"${STAGING_PATH}"'"
+  }'
+
+
+
+  ### PERF TEST
+  \
+
+aws glue start-job-run \
+  --job-name ot-iceberg-partition-perf-test-v2 \
+  --arguments '{
+    "--TEST_SCOPE": "insert",
+    "--DATABASE_NAME": "market_data",
+    "--INPUT_TABLE": "glue_catalog.market_data.ot_pftst_sensi_input_data",
+    "--JOIN_KEY": "primary_key",
+    "--TABLE_UNPARTITIONED": "glue_catalog.market_data.ot_pftst_sensi_unpartitioned",
+    "--TABLE_IDENTITY": "glue_catalog.market_data.ot_pftst_sensi_datepart",
+    "--PARTITION_COL_IDENTITY": "cob_date",
+    "--TABLE_BUCKET": "glue_catalog.market_data.ot_pftst_sensi_bucket",
+    "--PARTITION_COL_BUCKET": "bucket(16, primary_key)",    
+    "--TABLE_TRUNCATE": "glue_catalog.market_data.ot_pftst_sensi_truncate",
+    "--PARTITION_COL_TRUNCATE": "truncate(10, priamry_key)",    
+    "--TABLE_COMPOSITE": "glue_catalog.market_data.ot_pftst_sensi_truncate",
+    "--PARTITION_COL_COMPOSITE": "month(cob_date), bucket(16, primary_key)",
+    "--RESULTS_PATH": "s3://'"${S3_BUCKET}"'/perf_results/"
+  }'
 
 
 

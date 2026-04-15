@@ -18,6 +18,9 @@ Usage:
     # INSERT-specific parameters
     --INPUT_TABLE           : Fully-qualified Iceberg table with source data
                               (required when TEST_SCOPE=insert)
+    --JOIN_KEY              : Column used as the join/primary key for I-4 (upsert)
+                              and I-5 (concurrent writers). Works with any data
+                              type including alphanumeric strings. (default: id)
 
     # Table names per partition strategy (provide one or more):
     --TABLE_UNPARTITIONED   : Table name for unpartitioned strategy
@@ -44,6 +47,7 @@ Example:
     "--TEST_SCOPE": "insert",
     "--DATABASE_NAME": "perf_test_db",
     "--INPUT_TABLE": "glue_catalog.perf_test_db.source_data",
+    "--JOIN_KEY": "order_id",
     "--TABLE_UNPARTITIONED": "glue_catalog.perf_test_db.perf_unpart",
     "--TABLE_IDENTITY": "glue_catalog.perf_test_db.perf_identity",
     "--PARTITION_COL_IDENTITY": "created_date",
@@ -103,6 +107,9 @@ def get_params():
         "results_path": all_args.get("RESULTS_PATH", ""),
         "input_table":  all_args.get("INPUT_TABLE", ""),
     }
+
+    # Join key for I-4 (upsert) and I-5 (concurrent writers)
+    params["join_key"] = all_args.get("JOIN_KEY", "id")
 
     # Query-specific overrides
     params["query_partition_filter"] = all_args.get("QUERY_PARTITION_FILTER", "")
@@ -283,9 +290,13 @@ def run_insert_i3_out_of_order(spark, dataset, target_table):
     return result
 
 
-def run_insert_i4_upsert(spark, dataset, target_table):
+def run_insert_i4_upsert(spark, dataset, target_table, join_key="id"):
     """I-4: Upsert / merge — MERGE INTO with 10% updates, 90% inserts.
-    First seeds the table with 10% of the data, then merges the full dataset."""
+    First seeds the table with 10% of the data, then merges the full dataset.
+
+    *join_key* is the column used for the MERGE ON condition. It can be any
+    data type (numeric or string).
+    """
     row_count = dataset.count()
 
     # Seed with 10% as the base
@@ -298,14 +309,14 @@ def run_insert_i4_upsert(spark, dataset, target_table):
 
     # Build SET clause dynamically from all columns except the join key
     columns = [f.name for f in dataset.schema.fields]
-    update_cols = [c for c in columns if c != "id"]
+    update_cols = [c for c in columns if c != join_key]
     set_clause = ", ".join(f"target.{c} = source.{c}" for c in update_cols)
 
     start = time.time()
     spark.sql(f"""
         MERGE INTO {target_table} AS target
         USING {source_view} AS source
-        ON target.id = source.id
+        ON target.{join_key} = source.{join_key}
         WHEN MATCHED THEN UPDATE SET {set_clause}
         WHEN NOT MATCHED THEN INSERT *
     """)
@@ -319,12 +330,20 @@ def run_insert_i4_upsert(spark, dataset, target_table):
     return result
 
 
-def run_insert_i5_concurrent(spark, dataset, target_table):
-    """I-5: Concurrent writers — 4 parallel writers inserting disjoint data."""
+def run_insert_i5_concurrent(spark, dataset, target_table, join_key="id"):
+    """I-5: Concurrent writers — 4 parallel writers inserting disjoint data.
+
+    Splits the dataset into 4 disjoint partitions using a hash of *join_key*,
+    which works for both numeric and string columns.
+    """
     row_count = dataset.count()
 
-    # Split dataset into 4 disjoint partitions by id modulo
-    splits = [dataset.filter(F.col("id") % 4 == i) for i in range(4)]
+    # Use crc32 hash to split any column type into 4 buckets deterministically
+    tagged = dataset.withColumn(
+        "_split_bucket",
+        F.abs(F.crc32(F.col(join_key).cast("string"))) % 4,
+    )
+    splits = [tagged.filter(F.col("_split_bucket") == i).drop("_split_bucket") for i in range(4)]
 
     durations = []
 
@@ -510,18 +529,20 @@ def run_insert_tests(spark, params, strategy_key, strategy_cfg, dataset):
     The target table must already exist; it is cleared before each test."""
     target_table = strategy_cfg["table"]
     partition_expr = strategy_cfg["partition_expr"]
+    join_key = params["join_key"]
     results = []
 
     print(f"\n{'='*60}")
     print(f"INSERT TESTS — Strategy: {strategy_key}  Table: {target_table}")
+    print(f"  Join key: {join_key}")
     print(f"{'='*60}")
 
     tests = [
-        ("I-1", run_insert_i1_bulk),
-        ("I-2", run_insert_i2_incremental),
-        ("I-3", run_insert_i3_out_of_order),
-        ("I-4", run_insert_i4_upsert),
-        ("I-5", run_insert_i5_concurrent),
+        ("I-1", lambda s, d, t: run_insert_i1_bulk(s, d, t)),
+        ("I-2", lambda s, d, t: run_insert_i2_incremental(s, d, t)),
+        ("I-3", lambda s, d, t: run_insert_i3_out_of_order(s, d, t)),
+        ("I-4", lambda s, d, t: run_insert_i4_upsert(s, d, t, join_key)),
+        ("I-5", lambda s, d, t: run_insert_i5_concurrent(s, d, t, join_key)),
     ]
 
     for test_id, test_fn in tests:
@@ -679,6 +700,7 @@ def main():
     print(f"  Strategies : {list(strategies.keys())}")
     if scope == "insert":
         print(f"  Input table: {params['input_table']}")
+        print(f"  Join key   : {params['join_key']}")
 
     sc = spark.sparkContext
     print(f"  Executors  : {sc._jsc.sc().getExecutorMemoryStatus().size()}")
