@@ -1,0 +1,442 @@
+{
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0,
+      "y": 0,
+      "width": 24,
+      "height": 2,
+      "properties": {
+        "markdown": "# Glue Job Monitoring Dashboard (Native CloudWatch)\nThis dashboard uses only native CloudWatch metric widgets — no Lambda required.\nIt relies on Glue job metrics emitted to CloudWatch when **Job metrics** is enabled on your Glue jobs.\n\n---"
+      }
+    },
+    {
+      "type": "text",
+      "x": 0,
+      "y": 2,
+      "width": 24,
+      "height": 1,
+      "properties": {
+        "markdown": "## Job Activity Overview"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 3,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.aggregate.numCompletedStages\"', 'Sum', 300)", "id": "completed", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Completed Stages",
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8,
+      "y": 3,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.aggregate.numFailedStages\"', 'Sum', 300)", "id": "failed", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Failed Stages",
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16,
+      "y": 3,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.aggregate.numCompletedTasks\"', 'Sum', 300)", "id": "completedTasks", "label": "${LABEL}", "visible": true}],
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.aggregate.numFailedTasks\"', 'Sum', 300)", "id": "failedTasks", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Tasks (Completed / Failed)",
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "text",
+      "x": 0,
+      "y": 9,
+      "width": 24,
+      "height": 1,
+      "properties": {
+        "markdown": "## Job Duration & Executors"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 10,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.aggregate.elapsedTime\"', 'Maximum', 300)", "id": "elapsed", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Elapsed Time (ms)",
+        "period": 300,
+        "stat": "Maximum",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 10,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.ExecutorAllocationManager.executors.numberAllExecutors\"', 'Average', 300)", "id": "activeExec", "label": "${LABEL}", "visible": true}],
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.ExecutorAllocationManager.executors.numberMaxNeededExecutors\"', 'Maximum', 300)", "id": "maxExec", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Active vs Max Needed Executors",
+        "period": 300,
+        "stat": "Average",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "text",
+      "x": 0,
+      "y": 16,
+      "width": 24,
+      "height": 1,
+      "properties": {
+        "markdown": "## Data Movement (Bytes & Records)"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 17,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.ALL.aggregate.bytesRead\"', 'Sum', 300)", "id": "bytesRead", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": true,
+        "region": "us-west-2",
+        "title": "All Jobs - Bytes Read",
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8,
+      "y": 17,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.ALL.aggregate.bytesWritten\"', 'Sum', 300)", "id": "bytesWritten", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": true,
+        "region": "us-west-2",
+        "title": "All Jobs - Bytes Written",
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16,
+      "y": 17,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.ALL.aggregate.recordsRead\"', 'Sum', 300)", "id": "recsRead", "label": "${LABEL}", "visible": true}],
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.ALL.aggregate.recordsWritten\"', 'Sum', 300)", "id": "recsWritten", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Records Read / Written",
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "text",
+      "x": 0,
+      "y": 23,
+      "width": 24,
+      "height": 1,
+      "properties": {
+        "markdown": "## Memory Utilization"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 24,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.jvm.heap.usage\"', 'Average', 300)", "id": "driverHeap", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Driver Heap Usage (fraction)",
+        "period": 300,
+        "stat": "Average",
+        "yAxis": {"left": {"min": 0, "max": 1}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8,
+      "y": 24,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.ALL.jvm.heap.usage\"', 'Average', 300)", "id": "execHeap", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Executor Heap Usage (fraction)",
+        "period": 300,
+        "stat": "Average",
+        "yAxis": {"left": {"min": 0, "max": 1}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16,
+      "y": 24,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.jvm.heap.used\"', 'Average', 300)", "id": "driverUsed", "label": "${LABEL}", "visible": true}],
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.ALL.jvm.heap.used\"', 'Average', 300)", "id": "execUsed", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Heap Used (bytes)",
+        "period": 300,
+        "stat": "Average",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "text",
+      "x": 0,
+      "y": 30,
+      "width": 24,
+      "height": 1,
+      "properties": {
+        "markdown": "## CPU Utilization"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 31,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.system.cpuSystemLoad\"', 'Average', 300)", "id": "driverCpu", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Driver CPU Load",
+        "period": 300,
+        "stat": "Average",
+        "yAxis": {"left": {"min": 0, "max": 1}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 31,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.ALL.system.cpuSystemLoad\"', 'Average', 300)", "id": "execCpu", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Executor CPU Load",
+        "period": 300,
+        "stat": "Average",
+        "yAxis": {"left": {"min": 0, "max": 1}}
+      }
+    },
+    {
+      "type": "text",
+      "x": 0,
+      "y": 37,
+      "width": 24,
+      "height": 1,
+      "properties": {
+        "markdown": "## Shuffle I/O"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 38,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.ALL.aggregate.shuffleBytesWritten\"', 'Sum', 300)", "id": "shuffleWrite", "label": "${LABEL}", "visible": true}],
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.ALL.aggregate.shuffleLocalBytesRead\"', 'Sum', 300)", "id": "shuffleRead", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - Shuffle Bytes (Written / Read)",
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 38,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.ALL.s3.filesystem.read_bytes\"', 'Sum', 300)", "id": "s3Read", "label": "${LABEL}", "visible": true}],
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.ALL.s3.filesystem.write_bytes\"', 'Sum', 300)", "id": "s3Write", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "All Jobs - S3 Read / Write Bytes",
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "text",
+      "x": 0,
+      "y": 44,
+      "width": 24,
+      "height": 1,
+      "properties": {
+        "markdown": "## Streaming Jobs (if applicable)"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 45,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.streaming.numRecords\"', 'Sum', 300)", "id": "streamRecs", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "Streaming - Records Processed",
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8,
+      "y": 45,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.streaming.batchProcessingTimeInMs\"', 'Average', 300)", "id": "streamBatch", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "Streaming - Batch Processing Time (ms)",
+        "period": 300,
+        "stat": "Average",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16,
+      "y": 45,
+      "width": 8,
+      "height": 6,
+      "properties": {
+        "metrics": [
+          [{"expression": "SEARCH('{Glue,JobName,JobRunId,Type} MetricName=\"glue.driver.streaming.numBatchesProcessed\"', 'Sum', 300)", "id": "streamBatches", "label": "${LABEL}", "visible": true}]
+        ],
+        "view": "timeSeries",
+        "stacked": false,
+        "region": "us-west-2",
+        "title": "Streaming - Batches Processed",
+        "period": 300,
+        "stat": "Sum",
+        "yAxis": {"left": {"min": 0}}
+      }
+    },
+    {
+      "type": "text",
+      "x": 0,
+      "y": 51,
+      "width": 24,
+      "height": 2,
+      "properties": {
+        "markdown": "---\n**Note:** This dashboard shows metrics for all Glue jobs that have **Job metrics** enabled. Each time series is auto-labeled with the JobName and JobRunId. The Glue console's summary counters (Total runs, Success rate, DPU hours) and the job runs table require the Glue API and cannot be replicated with native CloudWatch widgets alone — see `jobDashboard_console.json` for the Lambda-backed version."
+      }
+    }
+  ]
+}
