@@ -74,11 +74,26 @@ def migrate_table(
     return table_input
 
 
+def normalize_s3_uri(uri: str) -> str:
+    """Ensure the URI starts with s3:// and strip any trailing slash."""
+    if not uri.startswith("s3://"):
+        uri = f"s3://{uri}"
+    return uri.rstrip("/")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Migrate Glue Iceberg table locations between S3 buckets.")
     parser.add_argument("--database", required=True, help="Glue database name")
-    parser.add_argument("--shared-bucket", required=True, help="Source bucket name (without s3:// prefix)")
-    parser.add_argument("--dedicated-bucket", required=True, help="Destination bucket name (without s3:// prefix)")
+
+    # Support both legacy bucket-only args and new full-URI args
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument("--source-uri", help="Full source S3 URI (e.g. s3://bucket/prefix)")
+    source_group.add_argument("--shared-bucket", help="[Legacy] Source bucket name (without s3:// prefix)")
+
+    dest_group = parser.add_mutually_exclusive_group(required=True)
+    dest_group.add_argument("--dest-uri", help="Full destination S3 URI (e.g. s3://dest-bucket/new-prefix)")
+    dest_group.add_argument("--dedicated-bucket", help="[Legacy] Destination bucket name (without s3:// prefix)")
+
     parser.add_argument("--tables", nargs="*", help="Specific table names to migrate (default: all tables)")
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without updating Glue")
     parser.add_argument("--profile", help="AWS CLI profile name")
@@ -94,8 +109,16 @@ def main():
     session = boto3.Session(**session_kwargs)
     glue_client = session.client("glue")
 
-    old_prefix = f"s3://{args.shared_bucket}"
-    new_prefix = f"s3://{args.dedicated_bucket}"
+    # Resolve source and destination prefixes
+    if args.source_uri:
+        old_prefix = normalize_s3_uri(args.source_uri)
+    else:
+        old_prefix = f"s3://{args.shared_bucket}"
+
+    if args.dest_uri:
+        new_prefix = normalize_s3_uri(args.dest_uri)
+    else:
+        new_prefix = f"s3://{args.dedicated_bucket}"
 
     if args.tables:
         table_names = args.tables
