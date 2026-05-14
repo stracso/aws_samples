@@ -60,7 +60,7 @@ def migrate_table(
     table_def = response["Table"]
 
     table_input = strip_read_only_fields(table_def)
-    table_input = replace_strings(table_input, old_prefix, new_prefix)
+    table_input["StorageDescriptor"] = replace_strings(table_input["StorageDescriptor"], old_prefix, new_prefix)
 
     if dry_run:
         print(f"  [DRY RUN] Would update {table_name}")
