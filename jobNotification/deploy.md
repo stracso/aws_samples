@@ -91,6 +91,30 @@ aws iam put-role-policy \
   --policy-document file:///tmp/sns-publish-policy.json
 ```
 
+Create and attach Glue read policy (needed to fetch job run arguments and log config):
+
+```bash
+cat > /tmp/glue-read-policy.json << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "glue:GetJobRun",
+      "Resource": [
+        "arn:aws:glue:${REGION}:${ACCOUNT_ID}:job/*"
+      ]
+    }
+  ]
+}
+EOF
+
+aws iam put-role-policy \
+  --role-name $ROLE_NAME \
+  --policy-name glue-read \
+  --policy-document file:///tmp/glue-read-policy.json
+```
+
 Wait a few seconds for the role to propagate:
 
 ```bash
@@ -201,6 +225,7 @@ aws events remove-targets --rule glue-job-state-change --ids glue-notification-l
 aws events delete-rule --name glue-job-state-change
 aws lambda delete-function --function-name $FUNCTION_NAME
 aws iam delete-role-policy --role-name $ROLE_NAME --policy-name sns-publish
+aws iam delete-role-policy --role-name $ROLE_NAME --policy-name glue-read
 aws iam detach-role-policy --role-name $ROLE_NAME --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 aws iam delete-role --role-name $ROLE_NAME
 aws sns delete-topic --topic-arn $SNS_TOPIC_ARN
