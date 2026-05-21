@@ -78,9 +78,9 @@ class IcebergMigrationJob:
         if isinstance(obj, str):
             return obj.replace(old, new)
         if isinstance(obj, list):
-            return [replace_strings(item, old, new) for item in obj]
+            return [self._replace_strings(item, old, new) for item in obj]
         if isinstance(obj, dict):
-            return {k: replace_strings(v, old, new) for k, v in obj.items()}
+            return {k: self._replace_strings(v, old, new) for k, v in obj.items()}
         return obj
 
 
@@ -106,8 +106,8 @@ class IcebergMigrationJob:
         response = self.glue_client.get_table(DatabaseName=self.database, Name=table_name)
         table_def = response["Table"]
 
-        table_input = self.strip_read_only_fields(table_def)
-        table_input["StorageDescriptor"] = replace_strings(table_input["StorageDescriptor"], old_prefix, new_prefix)
+        table_input = self._strip_read_only_fields(table_def)
+        table_input["StorageDescriptor"] = self._replace_strings(table_input["StorageDescriptor"], old_prefix, new_prefix)
 
         if dry_run:
             print(f"  [DRY RUN] Would update {table_name}")
@@ -273,9 +273,12 @@ class IcebergMigrationJob:
 
         for table_name in self.table_names:
             fqn = f"glue_catalog.{self.database}.{table_name}"
-            df = self.spark.sql(f"SELECT count(*) AS cnt FROM {fqn}")
-            count = df.collect()[0]["cnt"]
-            print(f"Table {fqn} -> row count: {count}")
+            try:
+                df = self.spark.sql(f"SELECT count(*) AS cnt FROM {fqn}")
+                count = df.collect()[0]["cnt"]
+                print(f"Table {fqn} -> row count: {count}")
+            except Exception as ex:
+                print(f"[ERROR][Could not get table count] {ex}")
     
     def run(self):
         """Execute the full migration pipeline."""
