@@ -11,6 +11,7 @@ package-lock.json
 .pytest_cache
 .venv
 *.egg-info
+*.jar
 
 # CDK asset staging directory
 .cdk.staging
