@@ -44,6 +44,12 @@ CREDENTIALS_PROVIDER = "DefaultChain"
 # If set, the driver uses ProfileCredentialsProvider instead of DefaultChain
 AWS_PROFILE = None  # e.g. "my-profile"
 
+# Optional: VPC endpoint for private connectivity (PrivateLink)
+# Set this to your Athena VPC endpoint URL to route traffic through your VPC
+# instead of the public Athena endpoint.
+# Format: https://vpce-XXXXXXXXX.athena.REGION.vpce.amazonaws.com
+ATHENA_VPC_ENDPOINT = None  # e.g. "https://vpce-0abc123def456.athena.us-west-2.vpce.amazonaws.com"
+
 
 def build_jdbc_url():
     """Build the JDBC connection URL with inline parameters."""
@@ -60,6 +66,10 @@ def build_jdbc_url():
         params["ProfileName"] = AWS_PROFILE
     else:
         params["CredentialsProvider"] = CREDENTIALS_PROVIDER
+
+    # VPC endpoint – routes Athena API calls through PrivateLink
+    if ATHENA_VPC_ENDPOINT:
+        params["EndpointOverride"] = ATHENA_VPC_ENDPOINT
 
     # Build URL: jdbc:athena://key=value;key=value;
     param_str = ";".join(f"{k}={v}" for k, v in params.items()) + ";"
@@ -108,6 +118,7 @@ def main():
     print(f"  Workgroup: {WORKGROUP}")
     print(f"  Database:  {DATABASE}")
     print(f"  Profile:   {AWS_PROFILE or '(DefaultChain)'}")
+    print(f"  VPC Endpoint: {ATHENA_VPC_ENDPOINT or '(public)'}")
     print(f"  JDBC URL:  {jdbc_url}")
 
     try:

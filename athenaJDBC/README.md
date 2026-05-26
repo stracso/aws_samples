@@ -27,6 +27,7 @@ Edit the constants at the top of `athena_jdbc_connect.py`:
 | `DATABASE` | Default database to query |
 | `OUTPUT_LOCATION` | S3 bucket for query results |
 | `AWS_PROFILE` | (Optional) AWS profile name from `~/.aws/credentials` |
+| `ATHENA_VPC_ENDPOINT` | (Optional) VPC endpoint URL for private connectivity via PrivateLink |
 
 ## Usage
 
@@ -45,3 +46,17 @@ The script will:
 - Authentication uses `DefaultChain` (reads `~/.aws/credentials`, env vars, instance profile)
 - Set `AWS_PROFILE` to use a specific profile from your credentials file
 - Connection URL format: `jdbc:athena://Region=...;Workgroup=...;...;`
+
+## VPC Endpoint (PrivateLink)
+
+To route Athena traffic through your VPC instead of the public internet, set `ATHENA_VPC_ENDPOINT`:
+
+```python
+ATHENA_VPC_ENDPOINT = "https://vpce-0abc123def456.athena.us-west-2.vpce.amazonaws.com"
+```
+
+This adds `EndpointOverride` to the JDBC connection URL, directing all Athena API calls through the specified VPC interface endpoint. This requires:
+
+1. An **Athena VPC interface endpoint** created in your VPC (service: `com.amazonaws.<region>.athena`)
+2. Security groups allowing HTTPS (port 443) from your client to the endpoint
+3. DNS resolution configured (private DNS enabled on the endpoint, or use the endpoint URL directly)
