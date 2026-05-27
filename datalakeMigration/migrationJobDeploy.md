@@ -16,12 +16,36 @@
 
 ```bash
 SCRIPT_BUCKET="jpmc-iceberg-warehouse-038676220235-us-west-2"
+aws s3 cp s3_copy_job.py s3://${SCRIPT_BUCKET}/glue-scripts/s3_copy_job.py
+
 aws s3 cp iceberg_migration_job.py s3://${SCRIPT_BUCKET}/glue-scripts/iceberg_migration_job.py
 ```
 
 ---
 
 ## 2. Create the Glue Job
+
+```bash
+ROLE_ARN="arn:aws:iam::038676220235:role/GlueIcebergRole"
+SCRIPT_BUCKET="jpmc-iceberg-warehouse-038676220235-us-west-2"
+
+aws glue create-job \
+  --name "s3-copy-job" \
+  --role "${ROLE_ARN}" \
+  --command '{
+    "Name": "glueetl",
+    "ScriptLocation": "s3://'"${SCRIPT_BUCKET}"'/glue-scripts/s3_copy_job.py",
+    "PythonVersion": "3"
+  }' \
+  --glue-version "5.0" \
+  --worker-type "G.1X" \
+  --number-of-workers 2 \
+  --default-arguments '{
+    "--datalake-formats": "iceberg",
+    "--conf": "spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions --conf spark.sql.catalog.glue_catalog=org.apache.iceberg.spark.SparkCatalog --conf spark.sql.catalog.glue_catalog.catalog-impl=org.apache.iceberg.aws.glue.GlueCatalog --conf spark.sql.catalog.glue_catalog.io-impl=org.apache.iceberg.aws.s3.S3FileIO --conf spark.sql.iceberg.handle-timestamp-without-timezone=true --conf spark.sql.defaultCatalog=glue_catalog",
+    "--enable-glue-datacatalog": "true"
+  }'
+```
 
 ```bash
 ROLE_ARN="arn:aws:iam::038676220235:role/GlueIcebergRole"
@@ -50,6 +74,18 @@ aws glue create-job \
 ---
 
 ## 3. Run the Job
+
+### Basic invocation - copy job
+
+```bash
+aws glue start-job-run \
+  --job-name "s3-copy-job" \
+  --arguments '{
+    "--database_name": "jpmc_demo_warehouse",
+    "--target_uri": "s3://jpmc-iceberg-whv2-038676220235-us-west-2/warehouse",    
+    "--dryrun": "true"
+  }'
+```
 
 ### Basic invocation
 

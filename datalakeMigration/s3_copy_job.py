@@ -68,6 +68,70 @@ def multipart_copy(source_bucket, source_key, target_bucket, target_key, size):
         raise
 
 
+def validate_copy(database_name, tgt_bucket, tgt_prefix):
+    """Validate that all objects from each table in the source database exist in the destination.
+
+    For each table in the Glue database, lists all objects under the table's S3 location
+    and checks that a corresponding object exists at the expected destination path.
+
+    Returns a dict with per-table results and overall success status.
+    """
+    print("--- COPY VALIDATION ---")
+    print(f"DB: {database_name}, target bucket: {tgt_bucket}, target prefix: {tgt_prefix}")
+    glue_client = boto3.client("glue")
+    table_paginator = glue_client.get_paginator("get_tables")
+    results = {}
+    all_valid = True
+
+    for page in table_paginator.paginate(DatabaseName=database_name):
+        for table in page["TableList"]:
+            table_name = table["Name"]
+            location = table.get("StorageDescriptor", {}).get("Location", "")
+            if not location:
+                print(f"[VALIDATE] Skipping table {table_name}: no S3 location found")
+                continue
+
+            location = location.rstrip("/")
+            parsed = urlparse(location)
+            src_bucket = parsed.netloc
+            src_prefix = parsed.path.lstrip("/")
+            tgt_prefix_for_table = f"{tgt_prefix}/{table_name}" if tgt_prefix else table_name
+
+            source_keys = []
+            for src_page in paginator.paginate(Bucket=src_bucket, Prefix=src_prefix):
+                for obj in src_page.get("Contents", []):
+                    relative_path = obj["Key"][len(src_prefix):].lstrip("/")
+                    if relative_path:
+                        source_keys.append(relative_path)
+
+            missing = []
+            for relative_path in source_keys:
+                expected_key = f"{tgt_prefix_for_table}/{relative_path}" if tgt_prefix_for_table else relative_path
+                try:
+                    s3.head_object(Bucket=tgt_bucket, Key=expected_key)
+                except s3.exceptions.ClientError as e:
+                    if e.response["Error"]["Code"] == "404":
+                        missing.append(relative_path)
+                    else:
+                        raise
+
+            table_valid = len(missing) == 0
+            results[table_name] = {
+                "source_count": len(source_keys),
+                "missing_count": len(missing),
+                "missing_keys": missing[:20],  # cap to avoid huge output
+                "valid": table_valid,
+            }
+            if not table_valid:
+                all_valid = False
+                print(f"[VALIDATE] Table {table_name}: FAILED - {len(missing)}/{len(source_keys)} objects missing in destination")
+            else:
+                print(f"[VALIDATE] Table {table_name}: OK - all {len(source_keys)} objects found in destination")
+
+    print(f"[VALIDATE] Overall validation: {'PASSED' if all_valid else 'FAILED'}")
+    return {"all_valid": all_valid, "tables": results}
+
+
 def copy_objects(src_bucket, src_prefix, tgt_bucket, tgt_prefix):
     count = 0
     for page in paginator.paginate(Bucket=src_bucket, Prefix=src_prefix):
@@ -110,6 +174,8 @@ if database_name:
             print(f"Copied {count} objects for table {table_name}")
             copied += count
     print(f"Copied {copied} total objects from database {database_name} to {target_uri}")
+    validate_copy(database_name, target_bucket, target_prefix)
+
 else:
     if not source_uri:
         raise ValueError("Either --source_uri or --database_name must be provided")
