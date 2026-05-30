@@ -97,14 +97,33 @@ aws glue start-job-run \
     "--REGION": "us-west-2",
     "--DATABASE": "jpmc_demo_warehouse",
     "--TABLES": "main_rd_table,orders_pftest_small_datepart",
-    "--SHARED_BUCKET": "jpmc-iceberg-warehouse-038676220235-us-west-2",
-    "--SHARED_PREFIX": "warehouse",
     "--DEDICATED_BUCKET": "jpmc-iceberg-whv2-038676220235-us-west-2",
     "--DEDICATED_PREFIX": "warehouse",
+    "--SHARED_BUCKET": "jpmc-iceberg-warehouse-038676220235-us-west-2",
+    "--SHARED_PREFIX": "warehouse",    
     "--SKIP_CLEANUP": "false",
     "--DRYRUN": "true"
   }'
 ```
+
+
+```bash
+# All tables
+aws glue start-job-run \
+  --job-name "iceberg-migration-job" \
+  --arguments '{
+    "--GLUE_ENDPOINT": "https://glue.us-west-2.amazonaws.com",
+    "--REGION": "us-west-2",
+    "--DATABASE": "jpmc_demo_warehouse",    
+    "--DEDICATED_BUCKET": "jpmc-iceberg-whv2-038676220235-us-west-2",
+    "--DEDICATED_PREFIX": "warehouse",
+    "--SHARED_BUCKET": "jpmc-iceberg-warehouse-038676220235-us-west-2",
+    "--SHARED_PREFIX": "warehouse",        
+    "--SKIP_CLEANUP": "false",
+    "--DRYRUN": "true"
+  }'
+```
+
 
 ### Dry-run mode (no mutations, logs what would happen)
 

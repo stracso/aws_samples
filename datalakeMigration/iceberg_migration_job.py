@@ -11,14 +11,6 @@ Migrates Iceberg tables from a shared bucket to a dedicated bucket by:
 Usage:
     This script is intended to run as an AWS Glue ETL job (Glue 5.0, PySpark).
 
-    Job Parameters:
-        --database          : Glue catalog database name
-        --tables            : Comma-separated list of table names to migrate
-        --dedicated_bucket  : Target S3 bucket for the migrated tables
-        --db_s3_prefix      : S3 prefix within the bucket (default: "warehouse")
-        --region            : AWS region (default: "us-west-2")
-        --retain_snapshots  : Number of snapshots to retain after cleanup (default: 1)
-        --skip_cleanup      : If "true", skip snapshot expiration and orphan file removal
 """
 
 import sys
@@ -32,15 +24,16 @@ from awsglue.job import Job
 
 class IcebergMigrationJob:
     """Orchestrates the migration of Iceberg tables to a dedicated S3 bucket."""
-
     def __init__(self, args: dict):
         self.glue_endpoint = args["GLUE_ENDPOINT"]
         self.database = args["DATABASE"]
-        self.table_names = [t.strip() for t in args["TABLES"].split(",")]
+        self.table_names = []
+        if 'TABLES' in args and len(args['TABLES']) > 0:
+            self.table_names = [t.strip() for t in args["TABLES"].split(",")]
+        self.shared_bucket = args["SHARED_BUCKET"]
+        self.shared_uri = f"{self.shared_bucket}/{args['SHARED_PREFIX']}"
         self.dedicated_bucket = args["DEDICATED_BUCKET"]
         self.dedicated_uri = f"{self.dedicated_bucket}/{args['DEDICATED_PREFIX']}"
-        self.shared_bucket = args["SHARED_BUCKET"]
-        self.shared_uri = f"{self.shared_bucket}/{args['SHARED_PREFIX']}"        
         self.region = args.get("REGION", "us-east-1")
         self.retain_snapshots = "1"
         self.skip_cleanup = args.get("SKIP_CLEANUP", "false").lower() == "true"
@@ -93,6 +86,7 @@ class IcebergMigrationJob:
 
     def _get_all_tables(self) -> list[str]:
         """Paginate through all tables in a Glue database."""
+        print("Fetching list of table names from database...")
         table_names = []
         paginator = self.glue_client.get_paginator("get_tables")
         for page in paginator.paginate(DatabaseName=self.database):
@@ -282,6 +276,8 @@ class IcebergMigrationJob:
     
     def run(self):
         """Execute the full migration pipeline."""
+        if len(self.table_names) == 0:
+            self.table_names = self._get_all_tables()
         print(f"Starting Iceberg migration for database={self.database}', tables={self.table_names}, bucket={self.dedicated_bucket}")
 
         self._resolve_metadata_files()
@@ -302,22 +298,14 @@ class IcebergMigrationJob:
 # --------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    args = getResolvedOptions(
-        sys.argv,
-        [
-            "JOB_NAME",
-            "REGION",
-            "GLUE_ENDPOINT",
-            "DATABASE",
-            "TABLES",
-            "SHARED_BUCKET",
-            "SHARED_PREFIX",
-            "DEDICATED_BUCKET",
-            "DEDICATED_PREFIX",
-            "SKIP_CLEANUP",
-            "DRYRUN"
-        ],
-    )
-    print(f"INPUT ARGS: {args}")
-    migration = IcebergMigrationJob(args)
+    required_args = ["JOB_NAME", "REGION", "GLUE_ENDPOINT", "DATABASE", "DEDICATED_BUCKET", "SHARED_BUCKET",
+                     "DEDICATED_PREFIX", "SHARED_PREFIX", "SKIP_CLEANUP", "DRYRUN"]
+    optional_args = ["TABLES"]
+    resolved = getResolvedOptions(sys.argv, required_args)
+    for opt in optional_args:
+        if f"--{opt}" in sys.argv:
+            resolved.update(getResolvedOptions(sys.argv, [opt]))
+
+    print(f"INPUT ARGS: {resolved}")
+    migration = IcebergMigrationJob(resolved)
     migration.run()
