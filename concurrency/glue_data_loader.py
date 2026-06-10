@@ -125,7 +125,7 @@ ensure_main_table_exists()
 
 def generate_data():
     """
-    Generate synthetic data simulating a YAML-driven file load.
+    Generate synthetic data simulating a file load.
     In overlap_mode='isolated', all rows belong to this loader's source_system.
     In overlap_mode='overlapping', rows share a common source_system to force conflicts.
     """

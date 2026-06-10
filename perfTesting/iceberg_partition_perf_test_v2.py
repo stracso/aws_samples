@@ -132,8 +132,36 @@ def get_params():
     return params
 
 
+def get_glue_context_session():
+    sc = SparkContext()
+    glue_context = GlueContext(sc)
+    spark = glue_context.spark_session
+    glue_context.setConf("enable-continuous-log-filter", "true")
+    job = Job(glue_context)
+    return glue_context, job, spark
+
+
 def init_spark(params):
     """Initialise Spark session with Iceberg + Glue catalog."""
+    glue_context, job, spark = get_glue_context_session()
+    spark = (
+        SparkSession.builder
+        .config('spark.sql.defaultCatalog', catalog_name)
+        .config('spark.sql.execution.arrow.pyspark.enabled', "true")
+        .config(f'spark.sql.catalog.{catalog_name}', 'org.apache.iceberg.spark.SparkCatalog')
+        .config(f'spark.sql.catalog.{catalog_name}.warehouse', warehouse)
+        .config('spark.sql.extensions', 'org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions')
+        .config(f"spark.sql.catalog.{catalog_name}.catalog-impl", "org.apache.iceberg.aws.glue.GlueCatalog")
+        .config(f"spark.sql.catalog.{catalog_name}.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+        # --- Commit retries/backoff ---
+        .config(f"spark.sql.catalog.{catalog_name}.commit.retry.num-retries", "10")
+        .config(f"spark.sql.catalog.{catalog_name}.commit.retry.min-wait-ms", "200")
+        .config(f"spark.sql.catalog.{catalog_name}.commit.retry.max-wait-ms", "5000")
+        .config(f"spark.sql.catalog.{catalog_name}.commit.retry.total-timeout-ms", "600000")
+        .getOrCreate()
+    )
+    
+    """
     spark = (
         SparkSession.builder
         .config("spark.sql.catalog.glue_catalog", "org.apache.iceberg.spark.SparkCatalog")
@@ -142,7 +170,7 @@ def init_spark(params):
         .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
         .config("spark.sql.iceberg.handle-timestamp-without-timezone", "true")
         .getOrCreate()
-    )
+    )"""
     return spark
 
 
