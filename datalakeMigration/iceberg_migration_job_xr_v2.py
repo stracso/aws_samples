@@ -322,15 +322,8 @@ class IcebergMigrationJob:
                 # Step 2: Copy staged metadata to the target table's metadata folder
                 # The procedure returns just the filename, not a full S3 URI.
                 # Construct the full path using the known staging location.
-                if staged_metadata_output.startswith("s3://"):
-                    staged_metadata_path = staged_metadata_output
-                    staged_metadata_filename = os.path.basename(staged_metadata_path)
-                else:
-                    # It's just a filename — build full path from staging location
-                    staged_metadata_filename = staged_metadata_output
-                    staged_metadata_path = f"{staging_location}/metadata/{staged_metadata_filename}"
-
-                dest_metadata_path = f"s3://{self.dedicated_uri}/{table_name}/metadata/{staged_metadata_filename}"
+                staged_metadata_path = f"{staging_location}/metadata"
+                dest_metadata_path = f"s3://{self.dedicated_uri}/{table_name}/metadata"
 
                 # Parse bucket and key from staged path
                 staged_no_scheme = staged_metadata_path.replace("s3://", "")
@@ -343,37 +336,30 @@ class IcebergMigrationJob:
                 dest_key = dest_no_scheme.split("/", 1)[1]
 
                 print(f"  Copying metadata: {staged_metadata_path} -> {dest_metadata_path}")
-                s3_client.copy_object(
-                    Bucket=dest_bucket,
-                    Key=dest_key,
-                    CopySource={"Bucket": staged_bucket, "Key": staged_key},
-                )
 
                 # Also copy any manifest files from staging
-                staging_no_scheme = staging_location.replace("s3://", "")
-                staging_bucket = staging_no_scheme.split("/", 1)[0]
-                staging_prefix = staging_no_scheme.split("/", 1)[1]
+                #staging_no_scheme = staging_location.replace("s3://", "")
+                #staging_bucket = staging_no_scheme.split("/", 1)[0]
+                #staging_prefix = staging_no_scheme.split("/", 1)[1]
 
-                # List all files in staging and copy manifests to the target metadata folder
+                # List all files in staging and copy all metadata to the target metadata folder
                 paginator = s3_client.get_paginator("list_objects_v2")
-                for page in paginator.paginate(Bucket=staging_bucket, Prefix=staging_prefix):
+                for page in paginator.paginate(Bucket=staged_bucket, Prefix=staged_key):
                     for obj in page.get("Contents", []):
-                        staged_obj_key = obj["Key"]
-                        # Skip the metadata.json itself (already copied above)
-                        if staged_obj_key == staged_key:
-                            continue
+                        staged_obj_key = obj["Key"]                       
                         # Determine relative path from staging and place under table metadata
-                        relative_path = staged_obj_key[len(staging_prefix):].lstrip("/")
+                        relative_path = staged_obj_key[len(staged_key):].lstrip("/")
                         target_key = f"{self.dedicated_uri.split('/', 1)[1]}/{table_name}/metadata/{relative_path}"
                         print(f"  Copying staged file: {relative_path}")
+                        print(f"  SRC:[{staged_obj_key}] -> DEST:[{target_key}]")
                         s3_client.copy_object(
                             Bucket=dest_bucket,
                             Key=target_key,
-                            CopySource={"Bucket": staging_bucket, "Key": staged_obj_key},
+                            CopySource={"Bucket": staged_bucket, "Key": staged_obj_key},
                         )
 
                 # Step 3: Remove old catalog entry and register with new metadata
-                print(f"  Re-registering {fqn} with rewritten metadata at {dest_metadata_path}...")
+                print(f"  Re-registering {fqn} with rewritten metadata at {dest_metadata_path}/{staged_metadata_output}...")
                 try:
                     self.dest_glue_client.delete_table(
                         DatabaseName=self.database, Name=table_name
@@ -385,11 +371,11 @@ class IcebergMigrationJob:
                     f"""
                     CALL glue_catalog.system.register_table(
                         table => '{self.database}.{table_name}',
-                        metadata_file => '{dest_metadata_path}'
+                        metadata_file => '{dest_metadata_path}/{staged_metadata_output}'
                     )
                     """
                 )
-                print(f"  Registered {fqn} with metadata at {dest_metadata_path}")
+                print(f"  Registered {fqn} with metadata at {dest_metadata_path}/{staged_metadata_output}")
 
             print(f"Path rewrite complete for {fqn}")
 
@@ -466,7 +452,9 @@ class IcebergMigrationJob:
 
         for table_name in self.table_names:
             fqn = f"glue_catalog.{self.database}.{table_name}"
+            print(f">>> Validating details for {fqn} ...")
             try:
+                self.spark.sql(f"DESCRIBE EXTENDED {fqn}").show(truncate=False)
                 df = self.spark.sql(f"SELECT count(*) AS cnt FROM {fqn}")
                 count = df.collect()[0]["cnt"]
                 print(f"Table {fqn} -> row count: {count}")
